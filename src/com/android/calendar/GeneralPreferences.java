@@ -22,6 +22,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Vibrator;
 import android.preference.CheckBoxPreference;
@@ -60,7 +63,6 @@ public class GeneralPreferences extends PreferenceFragment implements
     public static final String KEY_ALERTS_CATEGORY = "preferences_alerts_category";
     public static final String KEY_ALERTS = "preferences_alerts";
     public static final String KEY_ALERTS_VIBRATE = "preferences_alerts_vibrate";
-    public static final String KEY_ALERTS_VIBRATE_WHEN = "preferences_alerts_vibrateWhen";
     public static final String KEY_ALERTS_RINGTONE = "preferences_alerts_ringtone";
     public static final String KEY_ALERTS_POPUP = "preferences_alerts_popup";
 
@@ -107,7 +109,7 @@ public class GeneralPreferences extends PreferenceFragment implements
     public static final boolean DEFAULT_SHOW_WEEK_NUM = false;
 
     CheckBoxPreference mAlert;
-    ListPreference mVibrateWhen;
+    CheckBoxPreference mVibrate;
     RingtonePreference mRingtone;
     CheckBoxPreference mPopup;
     CheckBoxPreference mUseHomeTZ;
@@ -147,17 +149,21 @@ public class GeneralPreferences extends PreferenceFragment implements
 
         final PreferenceScreen preferenceScreen = getPreferenceScreen();
         mAlert = (CheckBoxPreference) preferenceScreen.findPreference(KEY_ALERTS);
-        mVibrateWhen = (ListPreference) preferenceScreen.findPreference(KEY_ALERTS_VIBRATE_WHEN);
+        mVibrate = (CheckBoxPreference) preferenceScreen.findPreference(KEY_ALERTS_VIBRATE);
         Vibrator vibrator = (Vibrator) activity.getSystemService(Context.VIBRATOR_SERVICE);
         if (vibrator == null || !vibrator.hasVibrator()) {
             PreferenceCategory mAlertGroup = (PreferenceCategory) preferenceScreen
                     .findPreference(KEY_ALERTS_CATEGORY);
-            mAlertGroup.removePreference(mVibrateWhen);
-        } else {
-            mVibrateWhen.setSummary(mVibrateWhen.getEntry());
+            mAlertGroup.removePreference(mVibrate);
         }
 
         mRingtone = (RingtonePreference) preferenceScreen.findPreference(KEY_ALERTS_RINGTONE);
+        String ringToneUri = Utils.getSharedPreference(activity, KEY_ALERTS_RINGTONE, "");
+        if (!TextUtils.isEmpty(ringToneUri)) {
+            String ringtone = getRingtoneTitleFromUri(getActivity(), ringToneUri);
+            mRingtone.setSummary(ringtone == null ? "" : ringtone);
+        }
+
         mPopup = (CheckBoxPreference) preferenceScreen.findPreference(KEY_ALERTS_POPUP);
         mUseHomeTZ = (CheckBoxPreference) preferenceScreen.findPreference(KEY_HOME_TZ_ENABLED);
         mHideDeclined = (CheckBoxPreference) preferenceScreen.findPreference(KEY_HIDE_DECLINED);
@@ -191,8 +197,8 @@ public class GeneralPreferences extends PreferenceFragment implements
     }
 
     @Override
-    public void onResume() {
-        super.onResume();
+    public void onStart() {
+        super.onStart();
         getPreferenceScreen().getSharedPreferences()
                 .registerOnSharedPreferenceChangeListener(this);
         setPreferenceListeners(this);
@@ -210,16 +216,15 @@ public class GeneralPreferences extends PreferenceFragment implements
         mSnoozeDelay.setOnPreferenceChangeListener(listener);
         mRingtone.setOnPreferenceChangeListener(listener);
         mHideDeclined.setOnPreferenceChangeListener(listener);
-        mVibrateWhen.setOnPreferenceChangeListener(listener);
-
+        mVibrate.setOnPreferenceChangeListener(listener);
     }
 
     @Override
-    public void onPause() {
-        super.onPause();
+    public void onStop() {
         getPreferenceScreen().getSharedPreferences()
                 .unregisterOnSharedPreferenceChangeListener(this);
         setPreferenceListeners(null);
+        super.onStop();
     }
 
     @Override
@@ -280,15 +285,30 @@ public class GeneralPreferences extends PreferenceFragment implements
             mSnoozeDelay.setValue((String) newValue);
             mSnoozeDelay.setSummary(mSnoozeDelay.getEntry());
         } else if (preference == mRingtone) {
-            // TODO update this after b/3417832 is fixed
+            if (newValue instanceof String) {
+                String ringtone = getRingtoneTitleFromUri(getActivity(), (String) newValue);
+                mRingtone.setSummary(ringtone == null ? "" : ringtone);
+            }
             return true;
-        } else if (preference == mVibrateWhen) {
-            mVibrateWhen.setValue((String)newValue);
-            mVibrateWhen.setSummary(mVibrateWhen.getEntry());
+        } else if (preference == mVibrate) {
+            mVibrate.setChecked((Boolean) newValue);
+            return true;
         } else {
             return true;
         }
         return false;
+    }
+
+    public String getRingtoneTitleFromUri(Context context, String uri) {
+        if (TextUtils.isEmpty(uri)) {
+            return null;
+        }
+
+        Ringtone ring = RingtoneManager.getRingtone(getActivity(), Uri.parse(uri));
+        if (ring != null) {
+            return ring.getTitle(context);
+        }
+        return null;
     }
 
     /**
@@ -298,13 +318,9 @@ public class GeneralPreferences extends PreferenceFragment implements
      */
     private void migrateOldPreferences(SharedPreferences prefs) {
         // If needed, migrate vibration setting from a previous version
-        if (!prefs.contains(KEY_ALERTS_VIBRATE_WHEN) &&
-                prefs.contains(KEY_ALERTS_VIBRATE)) {
-            int stringId = prefs.getBoolean(KEY_ALERTS_VIBRATE, false) ?
-                    R.string.prefDefault_alerts_vibrate_true :
-                    R.string.prefDefault_alerts_vibrate_false;
-            mVibrateWhen.setValue(getActivity().getString(stringId));
-        }
+
+        mVibrate.setChecked(Utils.getDefaultVibrate(getActivity(), prefs));
+
         // If needed, migrate the old alerts type settin
         if (!prefs.contains(KEY_ALERTS) && prefs.contains(KEY_ALERTS_TYPE)) {
             String type = prefs.getString(KEY_ALERTS_TYPE, ALERT_TYPE_STATUS_BAR);
@@ -333,13 +349,11 @@ public class GeneralPreferences extends PreferenceFragment implements
      */
     private void updateChildPreferences() {
         if (mAlert.isChecked()) {
-            mVibrateWhen.setEnabled(true);
+            mVibrate.setEnabled(true);
             mRingtone.setEnabled(true);
             mPopup.setEnabled(true);
         } else {
-            mVibrateWhen.setValue(
-                    getActivity().getString(R.string.prefDefault_alerts_vibrate_false));
-            mVibrateWhen.setEnabled(false);
+            mVibrate.setEnabled(false);
             mRingtone.setEnabled(false);
             mPopup.setEnabled(false);
         }
